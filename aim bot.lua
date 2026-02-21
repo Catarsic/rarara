@@ -1,8 +1,12 @@
+-- korpsebunny GUI by catarsic
+-- Xeno executor ready - ✅ FOV КАМЕРЫ ВСЕГДА ИЗМЕНЁННЫЙ!
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
+local Lighting = game:GetService("Lighting")
 
 local lp = Players.LocalPlayer
 local cam = Workspace.CurrentCamera
@@ -11,16 +15,21 @@ local gethui = gethui or function() return lp:WaitForChild("PlayerGui") end
 
 local vars = {
     teamcheck = false,
-    fov = 120,
+    fov = 120,                    -- 🎯 FOV для аимбота (кружок)
+    fov_camera = 50,              -- 📷 FOV КАМЕРЫ - ВСЕГДА ЭТОТ!
     aimlock = false,
     esp = true,
     headhit = false,
     autofire = false,
+    spinbot = false,
+    bunnyhop = false,
+    nightvision = false,
+    ambientcolor = false,
     target = nil,
     distance = "N/A",
     color = Color3.fromRGB(255, 182, 193),
     smooth = 0.2,
-    spin = 6,
+    spinspeed = 6,
     bhspeed = 35,
     walkspeed = 16,
     wallcheck = true,
@@ -30,9 +39,106 @@ local vars = {
 
 local espobjs = {}
 local conns = {}
-local sliderconns = {}
-
+local fovcircle = nil
+local distlbl = nil
 local sg, mf, sf
+local bloom_effect = nil
+local sunrays_effect = nil
+
+-- ✅ FOV КАМЕРЫ ВСЕГДА ИЗМЕНЁННЫЙ!
+local function updateCameraFOV()
+    cam.FieldOfView = vars.fov_camera  -- 📷 ПОСТОЯННО!
+end
+
+-- FIXED NIGHT VISION
+local function toggleNightVision()
+    local cc = Lighting:FindFirstChild("NightVisionCC")
+    if not cc then
+        cc = Instance.new("ColorCorrectionEffect")
+        cc.Name = "NightVisionCC"
+        cc.Parent = Lighting
+    end
+    
+    if vars.nightvision then
+        Lighting.Brightness = 4
+        Lighting.GlobalShadows = false
+        Lighting.FogEnd = 9e9
+        Lighting.AmbientOcclusion = 0
+        Lighting.ClockTime = 12
+        Lighting.GeographicLatitude = 0
+        Lighting.TimeOfDay = "12:00:00"
+        cc.Enabled = true
+        cc.Brightness = 0.8
+        cc.Contrast = 0.2
+        cc.Saturation = 0.3
+        cc.TintColor = Color3.fromRGB(255, 255, 255)
+    else
+        Lighting.Brightness = 1
+        Lighting.GlobalShadows = true
+        Lighting.FogEnd = 100000
+        Lighting.AmbientOcclusion = 1
+        Lighting.ClockTime = 14
+        cc.Enabled = false
+    end
+end
+
+-- FIXED AMBIENT COLOR
+local function toggleAmbientColor()
+    if vars.ambientcolor then
+        Lighting.Ambient = vars.color
+        Lighting.OutdoorAmbient = vars.color
+        Lighting.ColorShift_Bottom = vars.color
+        Lighting.ColorShift_Top = vars.color
+        Lighting.Brightness = 4
+        Lighting.GlobalShadows = false
+        Lighting.AmbientOcclusion = 0
+        
+        bloom_effect = Lighting:FindFirstChild("AmbientBloom") or Instance.new("BloomEffect")
+        if bloom_effect.Name ~= "AmbientBloom" then
+            bloom_effect.Name = "AmbientBloom"
+            bloom_effect.Parent = Lighting
+        end
+        bloom_effect.Enabled = true
+        bloom_effect.Intensity = 1.2
+        bloom_effect.Size = 32
+        bloom_effect.Threshold = 0.8
+        
+        sunrays_effect = Lighting:FindFirstChild("AmbientSunRays") or Instance.new("SunRaysEffect")
+        if sunrays_effect.Name ~= "AmbientSunRays" then
+            sunrays_effect.Name = "AmbientSunRays"
+            sunrays_effect.Parent = Lighting
+        end
+        sunrays_effect.Enabled = true
+        sunrays_effect.Intensity = 0.4
+        sunrays_effect.Spread = 1
+        
+        local cc = Lighting:FindFirstChild("AmbientCC")
+        if not cc then
+            cc = Instance.new("ColorCorrectionEffect")
+            cc.Name = "AmbientCC"
+            cc.Parent = Lighting
+        end
+        cc.Enabled = true
+        cc.TintColor = vars.color
+        cc.Brightness = 0.3
+        cc.Contrast = 0.4
+        cc.Saturation = 0.6
+    else
+        Lighting.Ambient = Color3.fromRGB(64, 64, 77)
+        Lighting.OutdoorAmbient = Color3.fromRGB(107, 116, 127)
+        Lighting.ColorShift_Bottom = Color3.fromRGB(168, 184, 255)
+        Lighting.ColorShift_Top = Color3.fromRGB(95, 121, 199)
+        Lighting.Brightness = 1
+        Lighting.GlobalShadows = true
+        Lighting.AmbientOcclusion = 1
+        
+        if bloom_effect then bloom_effect.Enabled = false end
+        if sunrays_effect then sunrays_effect.Enabled = false end
+        
+        local cc = Lighting:FindFirstChild("AmbientCC")
+        if cc then cc.Enabled = false end
+    end
+end
 
 local function raycast(part, char)
     if not vars.wallcheck then return true end
@@ -99,14 +205,13 @@ local function shoot()
         if vu then
             vu:Button1Down(Vector2.new())
             task.wait(0.03)
-            vu:Button1Up(Vector3.new())
+            vu:Button1Up(Vector2.new())
         end
     end)
     
     if mouse1click then mouse1click() end
 end
 
--- bunnyhop setup
 local function bh(char)
     local hum = char:FindFirstChildOfClass("Humanoid")
     if not hum then return end
@@ -161,7 +266,6 @@ local function makeslider(p, y, text, min, max, def, w, cb)
 
     local val = def
     local drag = false
-    local sliderconns = {}
 
     local function moved(input)
         if not drag or not track.AbsoluteSize then return end
@@ -180,19 +284,17 @@ local function makeslider(p, y, text, min, max, def, w, cb)
         end
     end)
 
-    local moveconn = UserInputService.InputChanged:Connect(function(i)
+    UserInputService.InputChanged:Connect(function(i)
         if drag and i.UserInputType == Enum.UserInputType.MouseMovement then
             moved(i)
         end
     end)
 
-    local endconn = UserInputService.InputEnded:Connect(function(i)
+    UserInputService.InputEnded:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 then
             drag = false
         end
     end)
-
-    table.insert(sliderconns, {moveconn, endconn})
 end
 
 local function maingui()
@@ -207,8 +309,8 @@ local function maingui()
     if syn and syn.protect_gui then syn.protect_gui(sg) end
 
     mf = Instance.new("Frame")
-    mf.Size = UDim2.new(0, 320, 0, 500)
-    mf.Position = UDim2.new(1, -340, 0, 50)
+    mf.Size = UDim2.new(0, 340, 0, 560)
+    mf.Position = UDim2.new(1, -360, 0, 50)
     mf.BackgroundColor3 = Color3.fromRGB(20,20,20)
     mf.BorderSizePixel = 2
     mf.BorderColor3 = vars.color
@@ -239,27 +341,28 @@ local function maingui()
     title.TextColor3 = Color3.new(1,1,1)
     title.TextScaled = true
     title.Font = Enum.Font.SourceSansBold
-    title.Text = "by catarsic"
+    title.Text = "korpsebunny GUI by catarsic"
     title.ZIndex = 6
     title.Parent = mf
 
-    -- кнопки 2x3
     local btns = {
-        {pos=UDim2.new(0,10,0,42), txt="Aimlock: OFF", var="aimlock"},
-        {pos=UDim2.new(0,10,0,78), txt="Head Aim: OFF", var="headhit"},
-        {pos=UDim2.new(0,10,0,114), txt="ESP: ON", var="esp"},
-        {pos=UDim2.new(0,165,0,42), txt="AutoFire: OFF", var="autofire"},
-        {pos=UDim2.new(0,165,0,78), txt="Spinbot: OFF", var="spin"},
-        {pos=UDim2.new(0,165,0,114), txt="Bunnyhop: OFF", var="bunnyhop"}
+        {pos=UDim2.new(0,10,0,42), txt="Aimlock", var="aimlock"},
+        {pos=UDim2.new(0,10,0,78), txt="Head Aim", var="headhit"},
+        {pos=UDim2.new(0,10,0,114), txt="ESP", var="esp"},
+        {pos=UDim2.new(0,10,0,150), txt="Ambient Color", var="ambientcolor"},
+        {pos=UDim2.new(0,175,0,42), txt="AutoFire", var="autofire"},
+        {pos=UDim2.new(0,175,0,78), txt="Spinbot", var="spinbot"},
+        {pos=UDim2.new(0,175,0,114), txt="Bunnyhop", var="bunnyhop"},
+        {pos=UDim2.new(0,175,0,150), txt="NightVision", var="nightvision"}
     }
 
     for i, b in ipairs(btns) do
         local button = Instance.new("TextButton")
-        button.Size = UDim2.new(0, 140, 0, 28)
+        button.Size = UDim2.new(0, 150, 0, 28)
         button.Position = b.pos
         button.BackgroundColor3 = Color3.fromRGB(45,45,45)
         button.BorderColor3 = vars.color
-        button.Text = b.txt
+        button.Text = b.txt..": "..(vars[b.var] and "ON" or "OFF")
         button.TextColor3 = Color3.new(1,1,1)
         button.TextScaled = true
         button.Font = Enum.Font.SourceSans
@@ -268,12 +371,37 @@ local function maingui()
         
         button.MouseButton1Click:Connect(function()
             vars[b.var] = not vars[b.var]
-            button.Text = b.txt:gsub(":%s*...$", ": "..(vars[b.var] and "ON" or "OFF"))
+            button.Text = b.txt..": "..(vars[b.var] and "ON" or "OFF")
+            
+            if b.var == "nightvision" then
+                toggleNightVision()
+            elseif b.var == "ambientcolor" then
+                toggleAmbientColor()
+            end
         end)
     end
 
+    -- FOV CIRCLE (только для аимбота)
+    fovcircle = Instance.new("Frame")
+    fovcircle.Size = UDim2.new(0, vars.fov*2, 0, vars.fov*2)
+    fovcircle.Position = UDim2.new(0.5, -vars.fov, 0.5, -vars.fov)
+    fovcircle.BackgroundTransparency = 1
+    fovcircle.ZIndex = 1
+    fovcircle.Parent = sg
+    
+    local fovstroke = Instance.new("UIStroke")
+    fovstroke.Color = vars.color
+    fovstroke.Thickness = 3
+    fovstroke.Transparency = 0.7
+    fovstroke.Parent = fovcircle
+    
+    local fovcor = Instance.new("UICorner")
+    fovcor.CornerRadius = UDim.new(1, 0)
+    fovcor.Parent = fovcircle
+
+    -- Settings frame
     sf = Instance.new("Frame")
-    sf.Size = UDim2.new(0, 280, 0, 500)
+    sf.Size = UDim2.new(0, 280, 0, 520)
     sf.Position = UDim2.new(1, -300, 0, 50)
     sf.BackgroundColor3 = Color3.fromRGB(25,25,25)
     sf.BorderSizePixel = 2
@@ -305,10 +433,17 @@ local function maingui()
     stitle.Parent = sf
 
     makeslider(scroll, 34, "Aim Speed", 0.02, 1, vars.smooth, 260, function(v) vars.smooth = v end)
-    makeslider(scroll, 94, "Spin Speed", 1, 60, vars.spin, 260, function(v) vars.spin = v end)
+    makeslider(scroll, 94, "Spin Speed", 1, 60, vars.spinspeed, 260, function(v) vars.spinspeed = v end)
     makeslider(scroll, 154, "Bunny Speed", 10, 120, vars.bhspeed, 260, function(v) vars.bhspeed = v end)
     makeslider(scroll, 214, "Fire Rate", 0.03, 1, vars.firerate, 260, function(v) vars.firerate = v end)
-    makeslider(scroll, 274, "FOV", 30, 200, vars.fov, 260, function(v) vars.fov = vars.fov end)
+    makeslider(scroll, 274, "FOV Circle", 30, 200, vars.fov, 260, function(v) 
+        vars.fov = v
+        fovcircle.Size = UDim2.new(0, v*2, 0, v*2)
+        fovcircle.Position = UDim2.new(0.5, -v, 0.5, -v)
+    end)
+    makeslider(scroll, 334, "FOV Camera", 20, 120, vars.fov_camera, 260, function(v) 
+        vars.fov_camera = v  -- 📷 FOV КАМЕРЫ ПОСТОЯННЫЙ!
+    end)
 
     setbtn.MouseButton1Click:Connect(function()
         sf.Visible = not sf.Visible
@@ -317,7 +452,7 @@ local function maingui()
 
     local themelbl = Instance.new("TextLabel")
     themelbl.Size = UDim2.new(0, 300, 0, 18)
-    themelbl.Position = UDim2.new(0,10,0,320)
+    themelbl.Position = UDim2.new(0,10,0,450)
     themelbl.BackgroundTransparency = 1
     themelbl.TextColor3 = Color3.new(1,1,1)
     themelbl.Text = "Themes:"
@@ -336,12 +471,16 @@ local function maingui()
         mf.BorderColor3 = color
         sf.BorderColor3 = color
         setbtn.BackgroundColor3 = color
+        if fovcircle:FindFirstChildOfClass("UIStroke") then
+            fovcircle:FindFirstChildOfClass("UIStroke").Color = color
+        end
+        if vars.ambientcolor then toggleAmbientColor() end
     end
 
     for i, t in ipairs(themes) do
         local tb = Instance.new("TextButton")
         tb.Size = UDim2.new(0, 70, 0, 24)
-        tb.Position = UDim2.new(0, 10+(i-1)*75, 0, 342)
+        tb.Position = UDim2.new(0, 10+(i-1)*75, 0, 472)
         tb.BackgroundColor3 = t[1]
         tb.Text = t[2]
         tb.TextColor3 = Color3.new(1,1,1)
@@ -350,9 +489,9 @@ local function maingui()
         tb.MouseButton1Click:Connect(function() sett(t[1]) end)
     end
 
-    local distlbl = Instance.new("TextLabel")
+    distlbl = Instance.new("TextLabel")
     distlbl.Size = UDim2.new(0, 300, 0, 18)
-    distlbl.Position = UDim2.new(0,10,0,380)
+    distlbl.Position = UDim2.new(0,10,0,510)
     distlbl.BackgroundTransparency = 1
     distlbl.TextColor3 = Color3.new(1,1,1)
     distlbl.TextScaled = true
@@ -361,29 +500,31 @@ local function maingui()
     distlbl.Parent = mf
 end
 
--- основные лупы
+-- ✅ FOV КАМЕРЫ ВСЕГДА! (ПЕРВЫЙ ЛУП)
+table.insert(conns, RunService.RenderStepped:Connect(updateCameraFOV))
+
 table.insert(conns, RunService.RenderStepped:Connect(function()
     distlbl.Text = "Distance: "..vars.distance
 end))
 
 table.insert(conns, RunService.RenderStepped:Connect(function()
+    for plr, h in pairs(espobjs) do
+        if h then h:Destroy() end
+        espobjs[plr] = nil
+    end
+    
     if vars.esp then
         for _, plr in pairs(Players:GetPlayers()) do
-            if plr ~= lp and plr.Character and not espobjs[plr] then
+            if plr ~= lp and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
                 local h = Instance.new("Highlight")
                 h.Adornee = plr.Character
                 h.FillColor = vars.color
-                h.FillTransparency = 0.5
+                h.FillTransparency = 0.4
                 h.OutlineColor = Color3.new(1,1,1)
-                h.OutlineTransparency = 0.3
+                h.OutlineTransparency = 0
                 h.Parent = plr.Character
                 espobjs[plr] = h
             end
-        end
-    else
-        for plr, h in pairs(espobjs) do
-            if h then h:Destroy() end
-            espobjs[plr] = nil
         end
     end
 end))
@@ -407,12 +548,12 @@ table.insert(conns, RunService.RenderStepped:Connect(function()
 end))
 
 table.insert(conns, RunService.RenderStepped:Connect(function()
-    if vars.spin then
+    if vars.spinbot then
         local char = lp.Character
         if char then
-            local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+            local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
             if root then
-                root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(vars.spin), 0)
+                root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(vars.spinspeed), 0)
             end
         end
     end
@@ -425,4 +566,4 @@ table.insert(conns, UserInputService.InputBegan:Connect(function(key)
 end))
 
 maingui()
-print("by catarsic")
+print("korpsebunny loaded by catarsic - 📷 FOV КАМЕРЫ ВСЕГДА ИЗМЕНЁННЫЙ!")
