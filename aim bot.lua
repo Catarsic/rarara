@@ -1,4 +1,4 @@
--- korpsebunny GUI by catarsic
+-- korpebunny GUI by catarsic - ✅ ПОЛНЫЙ КОД С ПРОСТОЙ КНОПКОЙ БИНДА
 -- Xeno executor ready - ✅ FOV КАМЕРЫ ВСЕГДА ИЗМЕНЁННЫЙ!
 
 local Players = game:GetService("Players")
@@ -13,10 +13,19 @@ local cam = Workspace.CurrentCamera
 
 local gethui = gethui or function() return lp:WaitForChild("PlayerGui") end
 
+-- ✅ WHITELIST СИСТЕМА
+local whitelist = {
+    players = {},
+    showlist = true
+}
+
+-- ✅ ПРОСТОЙ AIM BIND КНОПКА
+local aimBindKey = nil  -- nil = выключен
+
 local vars = {
     teamcheck = false,
-    fov = 120,                    -- 🎯 FOV для аимбота (кружок)
-    fov_camera = 50,              -- 📷 FOV КАМЕРЫ - ВСЕГДА ЭТОТ!
+    fov = 120,
+    fov_camera = 50,
     aimlock = false,
     esp = true,
     headhit = false,
@@ -25,16 +34,18 @@ local vars = {
     bunnyhop = false,
     nightvision = false,
     ambientcolor = false,
+    whitelist = false,
     target = nil,
     distance = "N/A",
     color = Color3.fromRGB(255, 182, 193),
-    smooth = 0.2,
+    smooth = 0.12,
     spinspeed = 6,
     bhspeed = 35,
     walkspeed = 16,
     wallcheck = true,
     firerate = 0.1,
-    lastfire = 0
+    lastfire = 0,
+    prediction = 0.13
 }
 
 local espobjs = {}
@@ -44,13 +55,30 @@ local distlbl = nil
 local sg, mf, sf
 local bloom_effect = nil
 local sunrays_effect = nil
+local whitelistFrame = nil
+local bindFrame = nil
+local bindingMode = false
 
--- ✅ FOV КАМЕРЫ ВСЕГДА ИЗМЕНЁННЫЙ!
-local function updateCameraFOV()
-    cam.FieldOfView = vars.fov_camera  -- 📷 ПОСТОЯННО!
+-- ✅ ПРОСТАЯ ПРОВЕРКА БИНДА
+local function isAimBindPressed()
+    if not aimBindKey then return false end
+    
+    if aimBindKey:find("MouseButton") then
+        return UserInputService:IsMouseButtonPressed(Enum.UserInputType[aimBindKey])
+    else
+        return UserInputService:IsKeyDown(Enum.KeyCode[aimBindKey])
+    end
 end
 
--- FIXED NIGHT VISION
+local function updateCameraFOV()
+    cam.FieldOfView = vars.fov_camera
+end
+
+local function isWhitelisted(plr)
+    if not vars.whitelist then return false end
+    return whitelist.players[plr.Name] or false
+end
+
 local function toggleNightVision()
     local cc = Lighting:FindFirstChild("NightVisionCC")
     if not cc then
@@ -82,7 +110,6 @@ local function toggleNightVision()
     end
 end
 
--- FIXED AMBIENT COLOR
 local function toggleAmbientColor()
     if vars.ambientcolor then
         Lighting.Ambient = vars.color
@@ -143,10 +170,10 @@ end
 local function raycast(part, char)
     if not vars.wallcheck then return true end
     local origin = cam.CFrame.Position
-    local dir = part.Position - origin
+    local dir = (part.Position - origin).Unit * 1000
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {lp.Character}
+    params.FilterDescendantsInstances = {lp.Character or {}}
     local res = Workspace:Raycast(origin, dir, params)
     return not res or res.Instance:IsDescendantOf(char)
 end
@@ -157,13 +184,20 @@ local function closest()
     local pos = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") and lp.Character.HumanoidRootPart.Position or Vector3.new()
     
     for _, plr in pairs(Players:GetPlayers()) do
-        if plr ~= lp and plr.Character then
-            local hitpart = vars.headhit and plr.Character:FindFirstChild("Head") or plr.Character:FindFirstChild("HumanoidRootPart")
-            local hum = plr.Character:FindFirstChild("Humanoid")
-            if hitpart and hum and hum.Health > 0 and (not vars.teamcheck or plr.Team ~= lp.Team) then
-                if raycast(hitpart, plr.Character) then
+        if plr ~= lp and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            local char = plr.Character
+            local hum = char:FindFirstChild("Humanoid")
+            local root = char.HumanoidRootPart
+            
+            if isWhitelisted(plr) then continue end
+            
+            if hum and hum.Health > 0 and (not vars.teamcheck or plr.Team ~= lp.Team) then
+                if not vars.wallcheck or raycast(root, char) then
+                    local hitpart = vars.headhit and (char:FindFirstChild("Head") or root) or root
+                    
                     local screen, visible = cam:WorldToViewportPoint(hitpart.Position)
                     local d2d = (Vector2.new(screen.X, screen.Y) - center).Magnitude
+                    
                     if visible and d2d < dist and d2d <= vars.fov then
                         closest = plr
                         dist = d2d
@@ -178,12 +212,18 @@ end
 
 local function aimat()
     if vars.target and vars.target.Character then
-        local hitpart = vars.headhit and vars.target.Character:FindFirstChild("Head") or vars.target.Character:FindFirstChild("HumanoidRootPart")
-        if hitpart and raycast(hitpart, vars.target.Character) then
-            local vel = hitpart.Velocity or Vector3.new()
-            local pred = math.clamp(0.05 + (vars.distance/2000), 0.02, 0.1)
-            local predictpos = hitpart.Position + vel * pred
-            cam.CFrame = cam.CFrame:Lerp(CFrame.new(cam.CFrame.Position, predictpos), vars.smooth)
+        local char = vars.target.Character
+        local hitpart = vars.headhit and char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+        
+        if hitpart and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 then
+            local vel = hitpart.AssemblyLinearVelocity or Vector3.new()
+            local distance3d = (cam.CFrame.Position - hitpart.Position).Magnitude
+            local predict_time = vars.prediction * (distance3d / 100)
+            local predictpos = hitpart.Position + vel * predict_time
+            
+            local targetCFrame = CFrame.lookAt(cam.CFrame.Position, predictpos)
+            local alpha = vars.smooth * 2
+            cam.CFrame = cam.CFrame:Lerp(targetCFrame, alpha)
         else
             vars.target = nil
         end
@@ -234,6 +274,210 @@ end
 
 if lp.Character then bh(lp.Character) end
 lp.CharacterAdded:Connect(function(c) task.wait(0.5); bh(c) end)
+
+local function createWhitelistFrame()
+    if whitelistFrame then whitelistFrame:Destroy() end
+    
+    whitelistFrame = Instance.new("Frame")
+    whitelistFrame.Size = UDim2.new(0, 250, 0, 400)
+    whitelistFrame.Position = UDim2.new(0, 10, 0, 10)
+    whitelistFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    whitelistFrame.BorderSizePixel = 2
+    whitelistFrame.BorderColor3 = vars.color
+    whitelistFrame.Active = true
+    whitelistFrame.Draggable = true
+    whitelistFrame.Parent = sg
+    
+    local wtitle = Instance.new("TextLabel")
+    wtitle.Size = UDim2.new(1, 0, 0, 30)
+    wtitle.Position = UDim2.new(0, 0, 0, 0)
+    wtitle.BackgroundColor3 = vars.color
+    wtitle.Text = "👥 Whitelist Players"
+    wtitle.TextColor3 = Color3.new(1,1,1)
+    wtitle.TextScaled = true
+    wtitle.Font = Enum.Font.SourceSansBold
+    wtitle.ZIndex = 15
+    wtitle.Parent = whitelistFrame
+    
+    local wlist = Instance.new("ScrollingFrame")
+    wlist.Size = UDim2.new(1, -10, 1, -40)
+    wlist.Position = UDim2.new(0, 5, 0, 35)
+    wlist.BackgroundTransparency = 1
+    wlist.BorderSizePixel = 0
+    wlist.ScrollBarThickness = 6
+    wlist.ScrollBarImageColor3 = vars.color
+    wlist.CanvasSize = UDim2.new(0, 0, 0, 0)
+    wlist.Parent = whitelistFrame
+    
+    local function updateList()
+        for _, child in pairs(wlist:GetChildren()) do
+            if child:IsA("TextButton") then child:Destroy() end
+        end
+        
+        local playersList = {}
+        for _, plr in pairs(Players:GetPlayers()) do
+            if plr ~= lp then
+                table.insert(playersList, plr)
+            end
+        end
+        
+        local yPos = 0
+        for i, plr in ipairs(playersList) do
+            local btn = Instance.new("TextButton")
+            btn.Size = UDim2.new(1, 0, 0, 30)
+            btn.Position = UDim2.new(0, 0, 0, yPos)
+            btn.BackgroundColor3 = whitelist.players[plr.Name] and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(45, 45, 45)
+            btn.Text = plr.Name .. (plr.Team and " [" .. plr.Team.Name .. "]" or "")
+            btn.TextColor3 = Color3.new(1,1,1)
+            btn.TextScaled = true
+            btn.Font = Enum.Font.SourceSans
+            btn.ZIndex = 16
+            btn.Parent = wlist
+            
+            btn.MouseButton1Click:Connect(function()
+                whitelist.players[plr.Name] = not whitelist.players[plr.Name]
+                btn.BackgroundColor3 = whitelist.players[plr.Name] and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(45, 45, 45)
+            end)
+            
+            yPos = yPos + 35
+        end
+        
+        wlist.CanvasSize = UDim2.new(0, 0, 0, yPos)
+    end
+    
+    updateList()
+    Players.PlayerAdded:Connect(updateList)
+    Players.PlayerRemoving:Connect(updateList)
+end
+
+-- ✅ ПРОСТАЯ КНОПКА БИНДА
+local bindConnection = nil
+local function createBindFrame()
+    if bindFrame then 
+        bindFrame:Destroy()
+        bindFrame = nil
+        return 
+    end
+    
+    bindFrame = Instance.new("Frame")
+    bindFrame.Size = UDim2.new(0, 220, 0, 120)
+    bindFrame.Position = UDim2.new(0.5, -110, 0.5, -60)
+    bindFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    bindFrame.BorderSizePixel = 2
+    bindFrame.BorderColor3 = vars.color
+    bindFrame.Active = true
+    bindFrame.Draggable = true
+    bindFrame.Parent = sg
+    bindFrame.ZIndex = 20
+    
+    local bindTitle = Instance.new("TextLabel")
+    bindTitle.Size = UDim2.new(1, 0, 0, 25)
+    bindTitle.Position = UDim2.new(0, 0, 0, 0)
+    bindTitle.BackgroundColor3 = vars.color
+    bindTitle.Text = "🎯 Aim Bind"
+    bindTitle.TextColor3 = Color3.new(1,1,1)
+    bindTitle.TextScaled = true
+    bindTitle.Font = Enum.Font.SourceSansBold
+    bindTitle.ZIndex = 21
+    bindTitle.Parent = bindFrame
+    
+    local bindDesc = Instance.new("TextLabel")
+    bindDesc.Size = UDim2.new(1, -10, 0, 20)
+    bindDesc.Position = UDim2.new(0, 5, 0, 28)
+    bindDesc.BackgroundTransparency = 1
+    bindDesc.TextColor3 = Color3.fromRGB(200, 200, 200)
+    bindDesc.Text = "Кликни → нажми клавишу/кнопку"
+    bindDesc.TextSize = 13
+    bindDesc.TextXAlignment = Enum.TextXAlignment.Left
+    bindDesc.ZIndex = 21
+    bindDesc.Parent = bindFrame
+    
+    local bindSquare = Instance.new("TextButton")
+    bindSquare.Size = UDim2.new(0, 120, 0, 45)
+    bindSquare.Position = UDim2.new(0.5, -60, 0, 55)
+    bindSquare.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    bindSquare.Text = aimBindKey or "Забиндить"
+    bindSquare.TextColor3 = Color3.new(1,1,1)
+    bindSquare.TextScaled = true
+    bindSquare.Font = Enum.Font.SourceSansBold
+    bindSquare.ZIndex = 22
+    bindSquare.Parent = bindFrame
+    
+    local bindCorner = Instance.new("UICorner")
+    bindCorner.CornerRadius = UDim.new(0, 12)
+    bindCorner.Parent = bindSquare
+    
+    local clearBtn = Instance.new("TextButton")
+    clearBtn.Size = UDim2.new(0, 70, 0, 25)
+    clearBtn.Position = UDim2.new(0, 10, 1, -35)
+    clearBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    clearBtn.Text = "Сбросить"
+    clearBtn.TextColor3 = Color3.new(1,1,1)
+    clearBtn.TextScaled = true
+    clearBtn.Font = Enum.Font.SourceSans
+    clearBtn.ZIndex = 22
+    clearBtn.Parent = bindFrame
+    
+    local clearCorner = Instance.new("UICorner")
+    clearCorner.CornerRadius = UDim.new(0, 8)
+    clearCorner.Parent = clearBtn
+    
+    clearBtn.MouseButton1Click:Connect(function()
+        aimBindKey = nil
+        bindSquare.Text = "Забиндить"
+        bindSquare.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    end)
+    
+    bindSquare.MouseButton1Click:Connect(function()
+        if bindingMode then return end
+        bindingMode = true
+        bindSquare.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
+        bindSquare.Text = "ЖДЁМ КНОПКУ..."
+    end)
+    
+    if bindConnection then bindConnection:Disconnect() end
+    bindConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if not bindingMode or gameProcessed then return end
+        
+        local bindName
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            bindName = "MouseButton1"
+        elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
+            bindName = "MouseButton2"
+        elseif input.UserInputType == Enum.UserInputType.MouseButton3 then
+            bindName = "MouseButton3"
+        elseif input.UserInputType == Enum.UserInputType.MouseButton4 then
+            bindName = "MouseButton4"
+        elseif input.UserInputType == Enum.UserInputType.MouseButton5 then
+            bindName = "MouseButton5"
+        elseif input.UserInputType == Enum.UserInputType.Keyboard then
+            bindName = input.KeyCode.Name
+        else
+            return
+        end
+        
+        aimBindKey = bindName
+        bindingMode = false
+        
+        bindSquare.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+        if bindName == "MouseButton1" then
+            bindSquare.Text = "ЛКМ"
+        elseif bindName == "MouseButton2" then
+            bindSquare.Text = "ПКМ"
+        elseif bindName == "MouseButton3" then
+            bindSquare.Text = "Колёсико"
+        elseif bindName == "MouseButton4" then
+            bindSquare.Text = "Mouse4"
+        elseif bindName == "MouseButton5" then
+            bindSquare.Text = "Mouse5"
+        else
+            bindSquare.Text = bindName
+        end
+        
+        task.wait(1)
+        bindSquare.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    end)
+end
 
 local function makeslider(p, y, text, min, max, def, w, cb)
     local label = Instance.new("TextLabel")
@@ -309,7 +553,7 @@ local function maingui()
     if syn and syn.protect_gui then syn.protect_gui(sg) end
 
     mf = Instance.new("Frame")
-    mf.Size = UDim2.new(0, 340, 0, 560)
+    mf.Size = UDim2.new(0, 340, 0, 550)
     mf.Position = UDim2.new(1, -360, 0, 50)
     mf.BackgroundColor3 = Color3.fromRGB(20,20,20)
     mf.BorderSizePixel = 2
@@ -341,7 +585,7 @@ local function maingui()
     title.TextColor3 = Color3.new(1,1,1)
     title.TextScaled = true
     title.Font = Enum.Font.SourceSansBold
-    title.Text = "korpsebunny GUI by catarsic"
+    title.Text = "korpsebunny GUI - ПРОСТОЙ AIM BIND"
     title.ZIndex = 6
     title.Parent = mf
 
@@ -353,7 +597,9 @@ local function maingui()
         {pos=UDim2.new(0,175,0,42), txt="AutoFire", var="autofire"},
         {pos=UDim2.new(0,175,0,78), txt="Spinbot", var="spinbot"},
         {pos=UDim2.new(0,175,0,114), txt="Bunnyhop", var="bunnyhop"},
-        {pos=UDim2.new(0,175,0,150), txt="NightVision", var="nightvision"}
+        {pos=UDim2.new(0,175,0,150), txt="NightVision", var="nightvision"},
+        {pos=UDim2.new(0,10,0,186), txt="Whitelist", var="whitelist"},
+        {pos=UDim2.new(0,10,0,222), txt="🎯 Bind Key", var="bindkey"}  -- ✅ ПРОСТАЯ КНОПКА БИНДА
     }
 
     for i, b in ipairs(btns) do
@@ -370,10 +616,21 @@ local function maingui()
         button.Parent = mf
         
         button.MouseButton1Click:Connect(function()
+            if b.var == "bindkey" then
+                createBindFrame()
+                return
+            end
+            
             vars[b.var] = not vars[b.var]
             button.Text = b.txt..": "..(vars[b.var] and "ON" or "OFF")
             
-            if b.var == "nightvision" then
+            if b.var == "whitelist" then
+                if vars.whitelist then
+                    createWhitelistFrame()
+                else
+                    if whitelistFrame then whitelistFrame:Destroy() end
+                end
+            elseif b.var == "nightvision" then
                 toggleNightVision()
             elseif b.var == "ambientcolor" then
                 toggleAmbientColor()
@@ -381,7 +638,7 @@ local function maingui()
         end)
     end
 
-    -- FOV CIRCLE (только для аимбота)
+    -- FOV CIRCLE
     fovcircle = Instance.new("Frame")
     fovcircle.Size = UDim2.new(0, vars.fov*2, 0, vars.fov*2)
     fovcircle.Position = UDim2.new(0.5, -vars.fov, 0.5, -vars.fov)
@@ -442,7 +699,10 @@ local function maingui()
         fovcircle.Position = UDim2.new(0.5, -v, 0.5, -v)
     end)
     makeslider(scroll, 334, "FOV Camera", 20, 120, vars.fov_camera, 260, function(v) 
-        vars.fov_camera = v  -- 📷 FOV КАМЕРЫ ПОСТОЯННЫЙ!
+        vars.fov_camera = v
+    end)
+    makeslider(scroll, 394, "Prediction", 0.05, 0.3, vars.prediction, 260, function(v) 
+        vars.prediction = v 
     end)
 
     setbtn.MouseButton1Click:Connect(function()
@@ -475,6 +735,14 @@ local function maingui()
             fovcircle:FindFirstChildOfClass("UIStroke").Color = color
         end
         if vars.ambientcolor then toggleAmbientColor() end
+        if whitelistFrame then
+            whitelistFrame.BorderColor3 = color
+            whitelistFrame:FindFirstChild("TextLabel").BackgroundColor3 = color
+        end
+        if bindFrame then
+            bindFrame.BorderColor3 = color
+            bindFrame:FindFirstChild("TextLabel").BackgroundColor3 = color
+        end
     end
 
     for i, t in ipairs(themes) do
@@ -489,22 +757,21 @@ local function maingui()
         tb.MouseButton1Click:Connect(function() sett(t[1]) end)
     end
 
-    distlbl = Instance.new("TextLabel")
+    distlbl = Instance.bindFrame.new("TextLabel")
     distlbl.Size = UDim2.new(0, 300, 0, 18)
-    distlbl.Position = UDim2.new(0,10,0,510)
+    distlbl.Position = UDim2.new(0,10,0,500)
     distlbl.BackgroundTransparency = 1
     distlbl.TextColor3 = Color3.new(1,1,1)
     distlbl.TextScaled = true
-    distlbl.Text = "Distance: N/A"
+    distlbl.Text = "Distance: N/A | Bind: "..(aimBindKey or "НЕТ")
     distlbl.ZIndex = 6
     distlbl.Parent = mf
 end
 
--- ✅ FOV КАМЕРЫ ВСЕГДА! (ПЕРВЫЙ ЛУП)
 table.insert(conns, RunService.RenderStepped:Connect(updateCameraFOV))
 
 table.insert(conns, RunService.RenderStepped:Connect(function()
-    distlbl.Text = "Distance: "..vars.distance
+    distlbl.Text = "Distance: "..vars.distance.." | Bind: "..(aimBindKey or "НЕТ")
 end))
 
 table.insert(conns, RunService.RenderStepped:Connect(function()
@@ -516,6 +783,8 @@ table.insert(conns, RunService.RenderStepped:Connect(function()
     if vars.esp then
         for _, plr in pairs(Players:GetPlayers()) do
             if plr ~= lp and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+                if vars.whitelist and isWhitelisted(plr) then continue end
+                
                 local h = Instance.new("Highlight")
                 h.Adornee = plr.Character
                 h.FillColor = vars.color
@@ -529,14 +798,18 @@ table.insert(conns, RunService.RenderStepped:Connect(function()
     end
 end))
 
+-- ✅ АИМ ЛУП С ПРОСТЫМ БИНДОМ - ✅ ИСПРАВЛЕНО!
 table.insert(conns, RunService.RenderStepped:Connect(function()
-    if vars.aimlock and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
-        if not vars.target then vars.target = closest() end
+    if vars.aimlock and isAimBindPressed() then
+        if not vars.target or not vars.target.Character or not vars.target.Character.Parent then
+            vars.target = closest()
+        end
+        
         if vars.target then
             aimat()
             if vars.autofire then
                 local now = tick()
-                if now-vars.lastfire >= vars.firerate then
+                if now - vars.lastfire >= vars.firerate then
                     vars.lastfire = now
                     shoot()
                 end
@@ -566,4 +839,4 @@ table.insert(conns, UserInputService.InputBegan:Connect(function(key)
 end))
 
 maingui()
-print("korpsebunny loaded by catarsic - 📷 FOV КАМЕРЫ ВСЕГДА ИЗМЕНЁННЫЙ!")
+print("korpsebunny ПРОСТОЙ AIM BIND by catarsic - ✅ РАБОТАЕТ ЛЮБАЯ КЛАВИША/МЫШЬ!")
