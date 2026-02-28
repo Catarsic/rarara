@@ -1,17 +1,3 @@
---[[
-    KORPSEBUNNY GUI v2.9.5 [ULTRA EXTENDED VERSION]
-    Original UI Design: catarsic
-    Engine & Logic Overhaul: Gemini 3 Flash
-    
-    FEATURES:
-    - Turbo Aimlock (RenderStepped)
-    - Vector Physics Bunnyhop
-    - Advanced ESP (Box & Tracers)
-    - Working Whitelist UI (Server-wide)
-    - Lighting & Ambient Mods
-    - Original 2.9.5 Aesthetic
-]]
-
 -- [ SERVICES ]
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -19,70 +5,78 @@ local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 local Lighting = game:GetService("Lighting")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 local CoreGui = game:GetService("CoreGui")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local Camera = Workspace.CurrentCamera
 
--- [ LOCAL PLAYER DATA ]
+-- [ LOCAL PLAYER ]
 local lp = Players.LocalPlayer
-local cam = Workspace.CurrentCamera
 local mouse = lp:GetMouse()
 
--- [ FOLDERS & STORAGE ]
-local gethui = gethui or function() 
-    return lp:WaitForChild("PlayerGui") 
-end
+-- [ ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ]
+sg = nil
+mf = nil
+settingsFrame = nil
+cam = Camera
 
--- [ STATE VARIABLES ]
-local whitelist = { 
-    players = {},
-    active = false 
-}
-
+-- [ НАСТРОЙКИ ] (ДОБАВЛЕН camera_fov)
 local vars = {
     -- Aim Settings
     aimlock = false,
-    headhit = false,
+    aim_part = "Head",
+    available_parts = {"Head", "UpperTorso", "HumanoidRootPart", "LowerTorso"},
+    teamcheck = false,
     smooth = 0.08,
     prediction = 0.13,
-    fov = 120,
+    fov = 120,        -- FOV КРУГ АИМБОТА
+    camera_fov = 70,  -- FOV КАМЕРЫ
     wallcheck = true,
-    teamcheck = false,
     autofire = false,
-    firerate = 0.05,
     lastfire = 0,
-	aim_bind = Enum.UserInputType.MouseButton2,
+    aim_bind = Enum.UserInputType.MouseButton2,
 
     -- Visual Settings
     esp = true,
-    esp_boxes = true,
-    esp_tracers = false,
     fov_circle = true,
     nightvision = false,
-    ambientcolor = false,
-    color = Color3.fromRGB(255, 182, 193), -- Default Pink
-    
+    color = Color3.fromRGB(255, 182, 193),
+    tracers = false,
+    tracer_duration = 0.8,
+
     -- Movement & Fun
     bunnyhop = false,
     bhspeed = 45,
     spinbot = false,
     spinspeed = 15,
     walkspeed = 16,
-    full_overhaul = false,  -- По умолчанию выключено
-    skybox_id = "rbxassetid://159414210", -- ID картинки неба
-    fog_density = 0.5,      -- Насколько густой будет туман
+    full_overhaul = false,
+    skybox_id = "rbxassetid://159414210",
 
     -- Internal
     target = nil,
-    whitelist_open = false,
-    menu_open = true
+    whitelist = {players = {}}
 }
 
+-- [ ФУНКЦИЯ ЗАЩИТЫ ]
+local function gethui()
+    local success, target = pcall(function() return CoreGui end)
+    if success and target then return target end
+    return lp:WaitForChild("PlayerGui")
+end
+
+-- [ FOV CIRCLE CONSTRUCTION ]
+local fov_circle_draw = Drawing.new("Circle")
+fov_circle_draw.Visible = true
+fov_circle_draw.Thickness = 1
+fov_circle_draw.NumSides = 60
+fov_circle_draw.Filled = false
+fov_circle_draw.Transparency = 1
+fov_circle_draw.Color = vars.color
+
 -- [ UI OBJECT REFERENCES ]
-local sg, mf, wl_frame, wl_scroll, distlbl, fov_obj
+local wl_frame, wl_scroll, distlbl
 
 -- [ UTILITY FUNCTIONS ]
-
--- Raycast for Wallcheck
 local function isVisible(targetPart, targetPlayer)
     if not vars.wallcheck then return true end
     
@@ -99,62 +93,39 @@ local function isVisible(targetPart, targetPlayer)
         local hit = result.Instance
         return hit:IsDescendantOf(targetPlayer.Character)
     end
-    return false
+    return true
 end
 
--- Finding the optimal target
--- [ БЛОК 1: ТУРБО-ЛОГИКА ПОИСКА ЦЕЛИ ]
 local function getClosestPlayer()
     local closest = nil
-    local shortestDist = vars.fov
-    local center = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
-    
-    -- Используем GetPlayers для быстрого итератора
-    local allPlayers = Players:GetPlayers()
-    
-    for i = 1, #allPlayers do
-        local plr = allPlayers[i]
-        if plr ~= lp and plr.Character then
-            -- Оптимизированная проверка команды и вайтлиста
-            if vars.teamcheck and plr.Team == lp.Team then continue end
-            if vars.whitelist and whitelist.players[plr.Name] then continue end
+    local maxDist = vars.fov
+
+    for _, v in pairs(Players:GetPlayers()) do
+        if v ~= lp and v.Character and v.Character:FindFirstChild("HumanoidRootPart") then
+            if vars.teamcheck and v.Team == lp.Team then continue end
             
-            local char = plr.Character
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 then
-                local root = char:FindFirstChild("HumanoidRootPart")
-                if root then
-                    -- Выбор части тела
-                    local part = vars.headhit and char:FindFirstChild("Head") or root
-                    if part then
-                        local screenPos, onScreen = cam:WorldToViewportPoint(part.Position)
-                        if onScreen then
-                            local mag = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
-                            if mag <= shortestDist then
-                                -- Прямая проверка видимости (Wallcheck)
-                                if isVisible(part, plr) then
-                                    closest = plr
-                                    shortestDist = mag
-                                end
-                            end
-                        end
-                    end
+            local part = v.Character:FindFirstChild(vars.aim_part) or v.Character.HumanoidRootPart
+            if vars.wallcheck and not isVisible(part, v) then continue end
+
+            local pos, onScreen = cam:WorldToViewportPoint(v.Character.HumanoidRootPart.Position)
+            if onScreen then
+                local dist = (Vector2.new(mouse.X, mouse.Y) - Vector2.new(pos.X, pos.Y)).Magnitude
+                if dist < maxDist then
+                    maxDist = dist
+                    closest = v
                 end
             end
         end
     end
     return closest
 end
--- Weapon Activation
+
 local function triggerWeapon()
     local char = lp.Character
     if char then
         local tool = char:FindFirstChildOfClass("Tool")
-        if tool then
-            tool:Activate()
-        end
+        if tool then tool:Activate() end
     end
-    -- Support for games with manual input clicks
     VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
     task.delay(0.01, function()
         VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
@@ -162,7 +133,6 @@ local function triggerWeapon()
 end
 
 -- [ LIGHTING CONTROLS ]
-
 local function updateNightVision()
     local nv = Lighting:FindFirstChild("KorpseNightVision")
     if not nv then
@@ -186,31 +156,13 @@ local function updateNightVision()
     end
 end
 
-local function updateAmbient()
-    if vars.ambientcolor then
-        -- Когда включено: ставим твой цвет везде
-        game:GetService("Lighting").Ambient = vars.color
-        game:GetService("Lighting").OutdoorAmbient = vars.color
-        game:GetService("Lighting").GlobalShadows = false -- Выключаем тени, чтобы не было черных пятен
-        game:GetService("Lighting").Brightness = 2
-    else
-        -- Когда выключено: возвращаем стандартные настройки Roblox
-        game:GetService("Lighting").Ambient = Color3.fromRGB(127, 127, 127)
-        game:GetService("Lighting").OutdoorAmbient = Color3.fromRGB(127, 127, 127)
-        game:GetService("Lighting").GlobalShadows = true
-        game:GetService("Lighting").Brightness = 1
-    end
-end
 local function ApplyTotalOverhaul()
-    -- 1. Удаляем старые эффекты, чтобы они не накладывались друг на друга
-    for _, obj in pairs(game:GetService("Lighting"):GetChildren()) do
-        if obj:IsA("Sky") or obj:IsA("ColorCorrectionEffect") then
-            obj:Destroy()
-        end
+    for _, obj in pairs(Lighting:GetChildren()) do
+        if obj:IsA("Sky") or obj:IsA("ColorCorrectionEffect") then obj:Destroy() end
     end
-   if vars.full_overhaul then
-        -- 2. Ставим новое небо (Skybox)
-        local sky = Instance.new("Sky", game:GetService("Lighting"))
+    
+    if vars.full_overhaul then
+        local sky = Instance.new("Sky", Lighting)
         sky.SkyboxBk = vars.skybox_id
         sky.SkyboxDn = vars.skybox_id
         sky.SkyboxFt = vars.skybox_id
@@ -219,30 +171,56 @@ local function ApplyTotalOverhaul()
         sky.SkyboxUp = vars.skybox_id
         sky.SunAngularSize = 0
 
-        -- 3. Красим мир в цвет твоей темы (TintColor)
-        local cc = Instance.new("ColorCorrectionEffect", game:GetService("Lighting"))
+        local cc = Instance.new("ColorCorrectionEffect", Lighting)
         cc.Contrast = 0.05
         cc.Saturation = 0.2
         cc.TintColor = vars.color:Lerp(Color3.new(1, 1, 1), 0.5)
 
-        -- 4. Включаем туман и яркое освещение
-        game:GetService("Lighting").FogColor = vars.color
-        game:GetService("Lighting").FogEnd = 500
-        game:GetService("Lighting").Ambient = vars.color
-        game:GetService("Lighting").OutdoorAmbient = vars.color
-        game:GetService("Lighting").GlobalShadows = false
-        game:GetService("Lighting").Brightness = 2
+        Lighting.FogColor = vars.color
+        Lighting.FogEnd = 500
+        Lighting.Ambient = vars.color
+        Lighting.OutdoorAmbient = vars.color
+        Lighting.GlobalShadows = false
+        Lighting.Brightness = 2
     else
-        -- 5. Если выключили — возвращаем всё как было в обычном Роблоксе
-        game:GetService("Lighting").Ambient = Color3.fromRGB(127, 127, 127)
-        game:GetService("Lighting").OutdoorAmbient = Color3.fromRGB(127, 127, 127)
-        game:GetService("Lighting").GlobalShadows = true
-        game:GetService("Lighting").FogEnd = 100000
-        game:GetService("Lighting").Brightness = 1
+        Lighting.Ambient = Color3.fromRGB(127, 127, 127)
+        Lighting.OutdoorAmbient = Color3.fromRGB(127, 127, 127)
+        Lighting.GlobalShadows = true
+        Lighting.FogEnd = 100000
+        Lighting.Brightness = 1
     end
 end
--- [ WHITELIST UI UPDATE ]
 
+local function CreatePowerTracer(from, to)
+    if not vars.tracers then return end
+
+    local tracerModel = Instance.new("Part")
+    tracerModel.Name = "StaticTracer"
+    tracerModel.Anchored = true
+    tracerModel.CanCollide = false
+    tracerModel.Transparency = 1
+    tracerModel.Position = from
+    tracerModel.Parent = Workspace.Terrain
+
+    local a0 = Instance.new("Attachment", tracerModel)
+    local a1 = Instance.new("Attachment", tracerModel)
+    a1.WorldPosition = to 
+
+    local beam = Instance.new("Beam", tracerModel)
+    beam.Attachment0 = a0
+    beam.Attachment1 = a1
+    beam.Color = ColorSequence.new(vars.color)
+    beam.Width0 = 0.3
+    beam.Width1 = 0.3
+    beam.LightEmission = 1
+    beam.Brightness = 5
+    beam.Texture = "rbxassetid://446111271"
+    beam.TextureSpeed = 0
+    
+    game:GetService("Debris"):AddItem(tracerModel, vars.tracer_duration)
+end
+
+-- [ WHITELIST UI UPDATE ]
 local function refreshWhitelist()
     if not wl_scroll then return end
     wl_scroll:ClearAllChildren()
@@ -257,9 +235,9 @@ local function refreshWhitelist()
             local entry = Instance.new("TextButton")
             entry.Name = player.Name
             entry.Size = UDim2.new(1, -10, 0, 35)
-            entry.BackgroundColor3 = whitelist.players[player.Name] and Color3.fromRGB(46, 204, 113) or Color3.fromRGB(35, 35, 35)
+            entry.BackgroundColor3 = vars.whitelist.players[player.Name] and Color3.fromRGB(46, 204, 113) or Color3.fromRGB(35, 35, 35)
             entry.BorderSizePixel = 0
-            entry.Text = "  " .. player.DisplayName .. " (@" .. player.Name .. ")"
+            entry.Text = "  " .. player.DisplayName .. " (@ " .. player.Name .. ")"
             entry.TextColor3 = Color3.fromRGB(255, 255, 255)
             entry.TextXAlignment = Enum.TextXAlignment.Left
             entry.Font = Enum.Font.SourceSans
@@ -271,29 +249,114 @@ local function refreshWhitelist()
             corner.Parent = entry
             
             entry.MouseButton1Click:Connect(function()
-                whitelist.players[player.Name] = not whitelist.players[player.Name]
-                entry.BackgroundColor3 = whitelist.players[player.Name] and Color3.fromRGB(46, 204, 113) or Color3.fromRGB(35, 35, 35)
+                vars.whitelist.players[player.Name] = not vars.whitelist.players[player.Name]
+                entry.BackgroundColor3 = vars.whitelist.players[player.Name] and Color3.fromRGB(46, 204, 113) or Color3.fromRGB(35, 35, 35)
             end)
         end
     end
     wl_scroll.CanvasSize = UDim2.new(0, 0, 0, uiList.AbsoluteContentSize.Y + 10)
 end
 
--- [ GUI CONSTRUCTION - VERSION 2.9.5 ]
+local function buildAimSettings()
+    settingsFrame = Instance.new("Frame")
+    settingsFrame.Name = "AimExtraSettings"
+    settingsFrame.Size = UDim2.new(0, 220, 0, 220)
+    settingsFrame.Position = UDim2.new(1, 10, 0, 0) 
+    settingsFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    settingsFrame.Visible = false
+    settingsFrame.Parent = mf 
+    
+    Instance.new("UICorner", settingsFrame).CornerRadius = UDim.new(0, 10)
+    local stroke = Instance.new("UIStroke", settingsFrame)
+    stroke.Name = "AimStroke"
+    stroke.Color = vars.color
+    stroke.Thickness = 2
 
+    local stitle = Instance.new("TextLabel", settingsFrame)
+    stitle.Name = "AimTitle"
+    stitle.Size = UDim2.new(1, 0, 0, 35)
+    stitle.Text = "AIMBOT SETTINGS"
+    stitle.TextColor3 = vars.color
+    stitle.BackgroundTransparency = 1
+    stitle.Font = Enum.Font.SourceSansBold
+    stitle.TextSize = 16
+
+    local partBtn = Instance.new("TextButton", settingsFrame)
+    partBtn.Size = UDim2.new(1, -20, 0, 30)
+    partBtn.Position = UDim2.new(0, 10, 0, 40)
+    partBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    partBtn.Text = "Target: " .. (vars.aim_part or "Head")
+    partBtn.TextColor3 = Color3.new(1, 1, 1)
+    partBtn.Font = Enum.Font.SourceSans
+    Instance.new("UICorner", partBtn).CornerRadius = UDim.new(0, 6)
+
+    local pIdx = 1
+    partBtn.MouseButton1Click:Connect(function()
+        pIdx = pIdx + 1
+        if pIdx > #vars.available_parts then pIdx = 1 end
+        vars.aim_part = vars.available_parts[pIdx]
+        partBtn.Text = "Target: " .. vars.aim_part
+    end)
+
+    local function addMiniSlider(name, min, max, def, y, callback)
+        local sLabel = Instance.new("TextLabel", settingsFrame)
+        sLabel.Size = UDim2.new(1, -20, 0, 20)
+        sLabel.Position = UDim2.new(0, 10, 0, y)
+        sLabel.Text = name .. " (" .. def .. ")"
+        sLabel.TextColor3 = Color3.new(0.8, 0.8, 0.8)
+        sLabel.BackgroundTransparency = 1
+        sLabel.Font = Enum.Font.SourceSans
+        sLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+        local sTray = Instance.new("Frame", settingsFrame)
+        sTray.Size = UDim2.new(1, -20, 0, 4)
+        sTray.Position = UDim2.new(0, 10, 0, y + 22)
+        sTray.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        sTray.BorderSizePixel = 0
+        
+        local sFill = Instance.new("Frame", sTray)
+        sFill.Size = UDim2.new(math.clamp((def - min) / (max - min), 0, 1), 0, 1, 0)
+        sFill.BackgroundColor3 = vars.color
+        sFill.BorderSizePixel = 0
+
+        local dragging = false
+        local function update()
+            local mousePos = UserInputService:GetMouseLocation().X
+            local relX = math.clamp((mousePos - sTray.AbsolutePosition.X) / sTray.AbsoluteSize.X, 0, 1)
+            local val = math.floor((min + (max - min) * relX) * 100) / 100
+            sFill.Size = UDim2.new(relX, 0, 1, 0)
+            sLabel.Text = name .. " (" .. val .. ")"
+            callback(val)
+        end
+
+        sTray.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true update() end
+        end)
+        UserInputService.InputChanged:Connect(function(input)
+            if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then update() end
+        end)
+        UserInputService.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        end)
+    end
+
+    addMiniSlider("Smoothness", 0.01, 1, vars.smooth, 80, function(v) vars.smooth = v end)
+    addMiniSlider("FOV Radius", 10, 600, vars.fov, 120, function(v) vars.fov = v end)
+    addMiniSlider("Prediction", 0.01, 0.5, vars.prediction, 160, function(v) vars.prediction = v end)
+end
+
+-- [ GUI CONSTRUCTION ] (УДАЛЕНА Head Aim кнопка, ДОБАВЛЕН Camera FOV ползунок)
 local function buildGUI()
-    -- Base ScreenGui
     sg = Instance.new("ScreenGui")
     sg.Name = "Aimlock_v29"
     sg.ResetOnSpawn = false
     sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     sg.Parent = gethui()
     
-    -- Main Frame
     mf = Instance.new("Frame")
     mf.Name = "MainFrame"
-    mf.Size = UDim2.new(0, 340, 0, 560)
-    mf.Position = UDim2.new(1, -360, 0.5, -280)
+    mf.Size = UDim2.new(0, 340, 0, 600)
+    mf.Position = UDim2.new(1, -360, 0.5, -250)
     mf.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
     mf.BorderSizePixel = 0
     mf.Active = true
@@ -311,7 +374,6 @@ local function buildGUI()
     mfStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     mfStroke.Parent = mf
     
-    -- Header Title
     local title = Instance.new("TextLabel")
     title.Name = "Title"
     title.Size = UDim2.new(1, 0, 0, 45)
@@ -323,7 +385,6 @@ local function buildGUI()
     title.TextSize = 22
     title.Parent = mf
     
-    -- Function to create buttons (original style)
     local function addToggle(name, vName, x, y)
         local btn = Instance.new("TextButton")
         btn.Name = name .. "_Toggle"
@@ -349,54 +410,44 @@ local function buildGUI()
             TweenService:Create(btn, TweenInfo.new(0.25), {BackgroundColor3 = targetColor}):Play()
             
             if vName == "nightvision" then updateNightVision() end
-            if vName == "ambientcolor" then updateAmbient() end
+            if vName == "full_overhaul" then ApplyTotalOverhaul() end
             if vName == "whitelist" then
-                wl_frame.Visible = vars.whitelist
+                if wl_frame then wl_frame.Visible = vars.whitelist end
                 if vars.whitelist then refreshWhitelist() end
             end
         end)
+        return btn
     end
     
-    -- Button Grid
-    addToggle("Aimlock", "aimlock", 10, 55)
-    addToggle("AutoFire", "autofire", 175, 55)
-    addToggle("Head Aim", "headhit", 10, 95)
-    addToggle("ESP", "esp", 175, 95)
-    addToggle("WallCheck", "wallcheck", 10, 135)
-    addToggle("Spinbot", "spinbot", 175, 135)
-    addToggle("Bunnyhop", "bunnyhop", 10, 175)
-    addToggle("NightVision", "nightvision", 175, 175)
-    -- [ ЗАМЕНЯЕМ СТАРЫЙ AMBIENT НА TOTAL OVERHAUL ]
-    local btn = Instance.new("TextButton", mf)
-    btn.Name = "Overhaul_Toggle"
-    btn.Size = UDim2.new(0, 150, 0, 32)
-    btn.Position = UDim2.new(0, 10, 0, 215) -- Та же позиция, что у Ambient
-    btn.BackgroundColor3 = vars.full_overhaul and Color3.fromRGB(60, 60, 60) or Color3.fromRGB(35, 35, 35)
-    btn.Text = "World Mod: " .. (vars.full_overhaul and "ON" or "OFF")
-    btn.TextColor3 = Color3.new(1,1,1)
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
-
-    btn.MouseButton1Click:Connect(function()
-        vars.full_overhaul = not vars.full_overhaul
-        btn.Text = "World Mod: " .. (vars.full_overhaul and "ON" or "OFF")
-        btn.BackgroundColor3 = vars.full_overhaul and Color3.fromRGB(60, 60, 60) or Color3.fromRGB(35, 35, 35)
-        
-        -- Вызываем нашу новую супер-функцию!
-        ApplyTotalOverhaul()
+    -- КНОПКИ (УДАЛЕНА Head Aim)
+    local aimBtn = addToggle("Aimlock", "aimlock", 10, 55)
+    aimBtn.MouseButton2Click:Connect(function()
+        if settingsFrame then
+            settingsFrame.Visible = not settingsFrame.Visible
+        end
     end)
-    addToggle("Whitelist", "whitelist", 175, 215)
     
-    -- Scrolling Section for Sliders
+    addToggle("AutoFire", "autofire", 175, 55)
+    addToggle("ESP", "esp", 10, 95)
+    addToggle("WallCheck", "wallcheck", 175, 95)
+    addToggle("Spinbot", "spinbot", 10, 135)
+    addToggle("Bunnyhop", "bunnyhop", 175, 135)
+    addToggle("NightVision", "nightvision", 10, 175)
+    addToggle("Bullet Tracers", "tracers", 175, 175)
+    addToggle("World Mod", "full_overhaul", 10, 215)
+    addToggle("Whitelist", "whitelist", 175, 215)
+    addToggle("Team Check", "teamcheck", 10, 255)
+    
     local sliderFrame = Instance.new("Frame")
     sliderFrame.Name = "SliderSection"
-    sliderFrame.Size = UDim2.new(1, -20, 0, 205)
-    sliderFrame.Position = UDim2.new(0, 10, 0, 260)
+    sliderFrame.Size = UDim2.new(1, -20, 0, 240)
+    sliderFrame.Position = UDim2.new(0, 10, 0, 305)
     sliderFrame.BackgroundTransparency = 1
     sliderFrame.Parent = mf
     
     local scroll = Instance.new("ScrollingFrame")
     scroll.Size = UDim2.new(1, 0, 1, 0)
-    scroll.CanvasSize = UDim2.new(0, 0, 0, 460)
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 500)
     scroll.BackgroundTransparency = 1
     scroll.ScrollBarThickness = 3
     scroll.ScrollBarImageColor3 = vars.color
@@ -458,24 +509,25 @@ local function buildGUI()
         end)
     end
     
-    addSlider("Aim Smooth", 0.01, 0.5, vars.smooth, 10, function(v) vars.smooth = v end)
-    addSlider("FOV Radius", 10, 800, vars.fov, 65, function(v) vars.fov = v end)
+    -- ПОЛЗУНКИ (FOV Radius = FOV КРУГА, Camera FOV = FOV КАМЕРЫ)
+    addSlider("Camera FOV", 10, 120, vars.camera_fov, 65, function(v) 
+        vars.camera_fov = v
+        cam.FieldOfView = v
+    end)
     addSlider("Spin Speed", 1, 100, vars.spinspeed, 120, function(v) vars.spinspeed = v end)
     addSlider("Bhop Speed", 16, 150, vars.bhspeed, 175, function(v) vars.bhspeed = v end)
-    addSlider("Prediction", 0.01, 0.4, vars.prediction, 230, function(v) vars.prediction = v end)
-    addSlider("WalkSpeed", 16, 250, vars.walkspeed, 285, function(v) vars.walkspeed = v end)
-    addSlider("Camera FOV", 70, 120, 70, 340, function(v) cam.FieldOfView = v end)
-	-- [ КНОПКА СМЕНЫ БИНДА ]
+    addSlider("WalkSpeed", 16, 250, vars.walkspeed, 230, function(v) vars.walkspeed = v end)
+    
     local bindBtn = Instance.new("TextButton")
     bindBtn.Name = "AimBind_Button"
-    bindBtn.Size = UDim2.new(0, 240, 0, 32) -- Ширина как у слайдеров
-    bindBtn.Position = UDim2.new(0, 10, 0, 395) -- Позиция Y ниже последнего слайдера
+    bindBtn.Size = UDim2.new(0, 240, 0, 32)
+    bindBtn.Position = UDim2.new(0, 10, 0, 290)
     bindBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
     bindBtn.Text = "Aim Bind: " .. vars.aim_bind.Name
     bindBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
     bindBtn.Font = Enum.Font.SourceSans
     bindBtn.TextSize = 16
-    bindBtn.Parent = scroll -- Добавляем в скролл-секцию
+    bindBtn.Parent = scroll
     Instance.new("UICorner", bindBtn).CornerRadius = UDim.new(0, 8)
 
     local listening = false
@@ -497,10 +549,10 @@ local function buildGUI()
             listening = false
         end
     end)
-    -- Theme Selector
+    
     local themeContainer = Instance.new("Frame")
     themeContainer.Size = UDim2.new(1, -20, 0, 45)
-    themeContainer.Position = UDim2.new(0, 10, 0, 470)
+    themeContainer.Position = UDim2.new(0, 10, 0, 520)
     themeContainer.BackgroundTransparency = 1
     themeContainer.Parent = mf
     
@@ -526,17 +578,23 @@ local function buildGUI()
             vars.color = t[1]
             mfStroke.Color = t[1]
             scroll.ScrollBarImageColor3 = t[1]
+            
+            if settingsFrame then
+                local s = settingsFrame:FindFirstChild("AimStroke")
+                if s then s.Color = t[1] end
+                local tit = settingsFrame:FindFirstChild("AimTitle")
+                if tit then tit.TextColor3 = t[1] end
+            end
+            
             if wl_frame then 
-                wl_frame:FindFirstChild("UIStroke").Color = t[1] 
+                local stroke = wl_frame:FindFirstChild("UIStroke")
+                if stroke then stroke.Color = t[1] end
             end
-            if vars.ambientcolor then updateAmbient() end
-			if vars.full_overhaul then
-                ApplyTotalOverhaul()
-            end
-		end)
+            
+            if vars.full_overhaul then ApplyTotalOverhaul() end
+        end)
     end
     
-    -- Distance Label
     distlbl = Instance.new("TextLabel")
     distlbl.Size = UDim2.new(1, 0, 0, 30)
     distlbl.Position = UDim2.new(0, 0, 1, -38)
@@ -547,7 +605,6 @@ local function buildGUI()
     distlbl.TextSize = 15
     distlbl.Parent = mf
 
-    -- [ WHITELIST FRAME ]
     wl_frame = Instance.new("Frame")
     wl_frame.Name = "WhitelistFrame"
     wl_frame.Size = UDim2.new(0, 240, 0, 420)
@@ -577,74 +634,51 @@ local function buildGUI()
     wl_scroll.BackgroundTransparency = 1
     wl_scroll.ScrollBarThickness = 2
     wl_scroll.Parent = wl_frame
-end
-
--- [ FOV CIRCLE DRAWING ]
-
-local function createFOV()
-    local fov = Drawing.new("Circle")
-    fov.Visible = true
-    fov.Thickness = 1
-    fov.Color = vars.color
-    fov.Filled = false
-    fov.Transparency = 1
-    return fov
-end
-fov_obj = createFOV()
-
--- [ MAIN RENDER LOOP ]
-
--- [ MAIN RENDER LOOP ]
-
-RunService.RenderStepped:Connect(function(dt)
-    -- Обновление круга FOV
-    if fov_obj then
-        fov_obj.Position = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
-        fov_obj.Radius = vars.fov
-        fov_obj.Color = vars.color
-        fov_obj.Visible = (vars.aimlock and vars.menu_open)
-    end
     
-    -- ЛОГИКА АИМЛОКА
+    buildAimSettings()
+end
+
+-- [ MAIN RENDER LOOP ]
+local tracerDebounce = false
+
+RunService.RenderStepped:Connect(function()
+    -- FOV КРУГ АИМБОТА всегда работает
+    fov_circle_draw.Radius = vars.fov
+    fov_circle_draw.Position = Vector2.new(mouse.X, mouse.Y + 36)
+    fov_circle_draw.Color = vars.color
+    
+    -- Camera FOV всегда применяется
+    cam.FieldOfView = vars.camera_fov
+
+    -- Aim logic
     if vars.aimlock then
         local target = getClosestPlayer()
-       local isPressed = false
-        if vars.aim_bind.Name:find("MouseButton") then
-            isPressed = UserInputService:IsMouseButtonPressed(vars.aim_bind)
-        else
-            isPressed = UserInputService:IsKeyDown(vars.aim_bind)
-        end
-        
-        if target and isPressed then
+        if target and target.Character then
             vars.target = target
-            local char = target.Character
-            local part = vars.headhit and char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+            local targetPart = target.Character:FindFirstChild(vars.aim_part) or target.Character.HumanoidRootPart
             
-            if part then
-                local velocity = part.AssemblyLinearVelocity
-                local predictedPos = part.Position + (velocity * vars.prediction)
-                local lookAt = CFrame.lookAt(cam.CFrame.Position, predictedPos)
-                local snapFactor = 1 - vars.smooth
+            if targetPart then
+                local lookAt = targetPart.Position
+                if vars.prediction > 0 then
+                    lookAt = lookAt + (targetPart.AssemblyLinearVelocity * vars.prediction)
+                end
                 
-                cam.CFrame = cam.CFrame:Lerp(lookAt, math.clamp(snapFactor, 0.01, 1))
+                local lookCFrame = CFrame.lookAt(cam.CFrame.Position, lookAt)
+                cam.CFrame = cam.CFrame:Lerp(lookCFrame, vars.smooth)
                 
-                -- [ УЛУЧШЕННЫЙ AUTOFIRE ДЛЯ AWM ]
                 if vars.autofire then
-                    -- Рассчитываем, насколько близко прицел к цели
-                    local screenPos, onScreen = cam:WorldToViewportPoint(part.Position)
+                    local screenPos, onScreen = cam:WorldToViewportPoint(targetPart.Position)
                     local center = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
                     local mouseDist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
                     
-                    -- Стреляем только если прицел РЕАЛЬНО наведен (дистанция меньше 10 пикселей от центра)
-                    -- И проверяем задержку между выстрелами
-                    if mouseDist < 10 and (tick() - vars.lastfire >= vars.firerate) then
+                    if mouseDist < 10 and (tick() - vars.lastfire >= 0.05) then
                         vars.lastfire = tick()
                         task.spawn(triggerWeapon)
                     end
                 end
                 
                 if lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") then
-                    local d = (lp.Character.HumanoidRootPart.Position - part.Position).Magnitude
+                    local d = (lp.Character.HumanoidRootPart.Position - targetPart.Position).Magnitude
                     distlbl.Text = "Target: " .. target.DisplayName .. " [" .. math.floor(d) .. " studs]"
                 end
             end
@@ -654,39 +688,33 @@ RunService.RenderStepped:Connect(function(dt)
         end
     end
     
--- [ БЛОК 3: УНИВЕРСАЛЬНЫЙ BHOP ]
+    -- Bunnyhop
     if vars.bunnyhop and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
         local char = lp.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local hum = char and char:FindFirstChild("Humanoid")
         
         if hrp and hum then
-            -- Принудительный прыжок
             if hum.FloorMaterial ~= Enum.Material.Air then
                 hum:ChangeState(Enum.HumanoidStateType.Jumping)
             end
             
-            -- Проверка движения
             local moveDir = hum.MoveDirection
             if moveDir.Magnitude > 0 then
-                -- Взлом через CFrame: двигаем позицию персонажа в обход физики
-                -- Рассчитываем шаг: (направление * скорость / 60 кадров)
                 local moveStep = moveDir * (vars.bhspeed / 60)
                 hrp.CFrame = hrp.CFrame + moveStep
-                
-                -- Поддержка инерции, чтобы анимация бега не ломалась
                 hrp.Velocity = Vector3.new(moveDir.X * 5, hrp.Velocity.Y, moveDir.Z * 5)
             end
         end
     end
 
-    -- SPINBOT
+    -- Spinbot
     if vars.spinbot and lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") then
         local hrp = lp.Character.HumanoidRootPart
         hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(vars.spinspeed), 0)
     end
     
-    -- ОПТИМИЗИРОВАННЫЙ ESP
+    -- ESP
     if vars.esp then
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr ~= lp and plr.Character then
@@ -707,43 +735,68 @@ RunService.RenderStepped:Connect(function(dt)
             if h then h.Enabled = false end
         end
     end
-end) -- Вот здесь закрывается RenderStepped правильно!
-
--- [ ОБРАБОТКА ВВОДА ]
-UserInputService.InputBegan:Connect(function(input, gpe)
-    if gpe then return end
-    if input.KeyCode == Enum.KeyCode.RightShift then
-        vars.menu_open = not vars.menu_open
-        if mf then mf.Visible = vars.menu_open end
-        if fov_obj then fov_obj.Visible = (vars.aimlock and vars.menu_open) end
+    
+    -- Tracers
+    if vars.tracers and lp.Character and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+        if not tracerDebounce then
+            tracerDebounce = true
+            
+            local char = lp.Character
+            local tool = char:FindFirstChildOfClass("Tool")
+            local originPart = (tool and (tool:FindFirstChild("Muzzle") or tool:FindFirstChild("Handle"))) 
+                             or char:FindFirstChild("Head")
+            
+            if originPart then
+                local startPos = originPart:IsA("Attachment") and originPart.WorldPosition or originPart.Position
+                CreatePowerTracer(startPos, mouse.Hit.Position)
+            end
+            
+            task.wait(0.1)
+            tracerDebounce = false
+        end
     end
 end)
 
--- [ СИСТЕМА ЗАПУСКА ]
-local function SafeIdentify()
-    local success, target = pcall(function()
-        return gethui() or game:GetService("CoreGui") or lp:WaitForChild("PlayerGui")
-    end)
-    return success and target or lp:WaitForChild("PlayerGui")
-end
+-- [ INPUT LOGIC ]
+UserInputService.InputBegan:Connect(function(input, processed)
+    if processed then return end
+    
+    if input.KeyCode == Enum.KeyCode.Insert then
+        if mf then
+            mf.Visible = not mf.Visible
+            if settingsFrame and not mf.Visible then
+                settingsFrame.Visible = false
+            end
+        end
+    end
+    
+    if input.UserInputType == vars.aim_bind or input.KeyCode == vars.aim_bind then
+        vars.aimlock = true
+    end
+end)
 
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == vars.aim_bind or input.KeyCode == vars.aim_bind then
+        vars.aimlock = false
+        vars.target = nil
+    end
+end)
+
+-- [ STARTUP ]
 task.spawn(function()
-    local storage = SafeIdentify()
+    local storage = gethui()
     local existing = storage:FindFirstChild("Aimlock_v29")
     if existing then existing:Destroy() end
     
     local status, err = pcall(function()
         buildGUI()
         sg.Parent = storage
-        sg.Enabled = true
         mf.Visible = true
-        if fov_obj then fov_obj.Visible = vars.aimlock end
-    end)
-
-    if status then
         refreshWhitelist()
-        print("KORPSEBUNNY v2.9.5: SUCCESS")
-    else
+        print("KORPSEBUNNY v2.9.5: FOV FIXED")
+    end)
+    
+    if not status then
         warn("CRITICAL ERROR: " .. tostring(err))
     end
 end)
